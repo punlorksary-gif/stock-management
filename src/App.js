@@ -295,7 +295,7 @@ function ProductsPage({ products, setProducts, moves }) {
   };
 
   const removeProduct = (id) => {
-    if (!confirm("Delete this product? Movements remain but product reference will be lost.")) return;
+    if (!window.confirm("Delete this product? Movements remain but product reference will be lost.")) return;
     setProducts(prev => prev.filter(p=>p.id!==id));
   };
 
@@ -577,10 +577,10 @@ export default function StockManagementApp() {
   const [page, setPage] = useState('dashboard');
 
   const resetAll = () => {
-    if (!confirm('Reset all local data? This cannot be undone.')) return;
+    if (!window.confirm('Reset all local data? This cannot be undone.')) return;
     localStorage.removeItem('sm_products');
     localStorage.removeItem('sm_moves');
-    location.reload();
+    window.location.reload();
   };
 
   return (
