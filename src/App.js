@@ -526,5 +526,5 @@ export default function App() {
       {current === 'reports' && <ReportsPage products={products} moves={moves} />}
     </PageShell>
   );
-};
+}
 
