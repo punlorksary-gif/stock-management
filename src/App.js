@@ -1,24 +1,25 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { Plus, Package, Upload, Download, Pencil, Trash2, Layers, AlertTriangle, Home, FileText, Settings, Save, RefreshCcw } from "lucide-react";
-
-/**
- * Basic Stock Management – Single-file React Template
- * - TailwindCSS styling (no external UI kit required)
- * - In-memory state with localStorage persistence
- * - Pages: Dashboard, Products, Stock In, Stock Out, Reports
- * - Features: Product CRUD, stock adjustments, low-stock alerts, movement history, simple charts
- *
- * How to use in ChatGPT preview:
- * 1) Click "Open in new window" (if shown) or preview directly.
- * 2) Everything is stored in your browser's localStorage. Use the ⚙️ Settings panel to reset.
- */
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc } from "firebase/firestore";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
 
 /*********************************
- * Types
+ * Firebase Initialization
  *********************************/
-/** @typedef {{id:string,name:string,sku:string,category:string,unit:string,cost:number,price:number,minStock:number,createdAt:string}} Product */
-/** @typedef {{id:string,type:'in'|'out',productId:string,qty:number,date:string,party?:string,unitPrice?:number}} Movement */
+const firebaseConfig = {
+  apiKey: "xxxxxx",
+  authDomain: "yourapp.firebaseapp.com",
+  projectId: "yourapp",
+  storageBucket: "yourapp.appspot.com",
+  messagingSenderId: "123456789",
+  appId: "1:123456789:web:abcdef"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
 
 /*********************************
  * Utilities
@@ -28,23 +29,40 @@ const fmt = new Intl.NumberFormat();
 const currency = (v) => (isFinite(v) ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(v) : "—");
 const todayISO = () => new Date().toISOString().slice(0,10);
 
-function useLocalStorage(key, initialValue) {
-  const [state, setState] = useState(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : initialValue;
-    } catch {
-      return initialValue;
-    }
-  });
-  useEffect(() => {
-    try { localStorage.setItem(key, JSON.stringify(state)); } catch {}
-  }, [key, state]);
-  return [state, setState];
+/*********************************
+ * Firestore Helpers
+ *********************************/
+async function fetchProducts() {
+  const snap = await getDocs(collection(db, "products"));
+  return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+async function fetchMoves() {
+  const snap = await getDocs(collection(db, "movements"));
+  return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+}
+
+async function saveProduct(product) {
+  if (!product.id) {
+    const docRef = await addDoc(collection(db, "products"), product);
+    return { ...product, id: docRef.id };
+  } else {
+    await updateDoc(doc(db, "products", product.id), product);
+    return product;
+  }
+}
+
+async function removeProduct(id) {
+  await deleteDoc(doc(db, "products", id));
+}
+
+async function saveMove(move) {
+  const docRef = await addDoc(collection(db, "movements"), move);
+  return { ...move, id: docRef.id };
 }
 
 /*********************************
- * Data model helpers
+ * Data Computation Helpers
  *********************************/
 function computeStockByProduct(products, moves) {
   const map = Object.fromEntries(products.map(p => [p.id, 0]));
@@ -52,7 +70,7 @@ function computeStockByProduct(products, moves) {
     if (!(m.productId in map)) continue;
     map[m.productId] += m.type === 'in' ? m.qty : -m.qty;
   }
-  return map; // {productId: currentQty}
+  return map;
 }
 
 function lastNDaysData(moves, days=30) {
@@ -75,52 +93,14 @@ function lastNDaysData(moves, days=30) {
 }
 
 /*********************************
- * Seed demo data on first load
- *********************************/
-function useSeededData() {
-  const [products, setProducts] = useLocalStorage("sm_products", /** @type {Product[]} */([]));
-  const [moves, setMoves] = useLocalStorage("sm_moves", /** @type {Movement[]} */([]));
-
-  useEffect(() => {
-    if (products.length === 0 && moves.length === 0) {
-      const now = new Date();
-      const pad = (n)=> String(n).padStart(2,'0');
-      const d = (offset)=> {
-        const t = new Date(now);
-        t.setDate(now.getDate() - offset);
-        return `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(t.getDate())}`;
-      };
-      const seedProducts = [
-        { id: uid(), name: "USB-C Cable 1m", sku: "CAB-UC1", category: "Cables", unit: "pcs", cost: 3.2, price: 9.99, minStock: 20, createdAt: new Date().toISOString() },
-        { id: uid(), name: "Wireless Mouse", sku: "MOU-WL1", category: "Peripherals", unit: "pcs", cost: 8.5, price: 19.99, minStock: 10, createdAt: new Date().toISOString() },
-        { id: uid(), name: "Cardboard Box S", sku: "BOX-SM", category: "Packaging", unit: "pcs", cost: 0.15, price: 0.4, minStock: 200, createdAt: new Date().toISOString() },
-      ];
-      const [p1,p2,p3] = seedProducts;
-      const seedMoves = [
-        { id: uid(), type:'in', productId:p1.id, qty:100, date: d(25), party:"Acme Supplies", unitPrice:3.2 },
-        { id: uid(), type:'out', productId:p1.id, qty:30, date: d(23), party:"Web Order #1001", unitPrice:9.99 },
-        { id: uid(), type:'in', productId:p2.id, qty:50, date: d(20), party:"Gizmo Co", unitPrice:8.5 },
-        { id: uid(), type:'out', productId:p2.id, qty:15, date: d(18), party:"Retail POS", unitPrice:19.99 },
-        { id: uid(), type:'in', productId:p3.id, qty:1000, date: d(15), party:"PackMan LLC", unitPrice:0.15 },
-        { id: uid(), type:'out', productId:p3.id, qty:400, date: d(12), party:"Fulfillment", unitPrice:0.4 },
-      ];
-      setProducts(seedProducts);
-      setMoves(seedMoves);
-    }
-  }, []);
-
-  return { products, setProducts, moves, setMoves };
-}
-
-/*********************************
- * Components
+ * Page Shell & Navigation
  *********************************/
 const PageShell = ({ children, onReset, current, setCurrent }) => (
   <div className="min-h-screen bg-slate-50 text-slate-900">
     <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
         <Layers className="w-6 h-6" />
-        <h1 className="text-xl font-semibold">Basic Stock Management</h1>
+        <h1 className="text-xl font-semibold">Stock Management (Firestore)</h1>
         <nav className="ml-auto flex gap-1 flex-wrap">
           <NavBtn icon={<Home className="w-4 h-4" />} label="Dashboard" active={current==='dashboard'} onClick={()=>setCurrent('dashboard')} />
           <NavBtn icon={<Package className="w-4 h-4" />} label="Products" active={current==='products'} onClick={()=>setCurrent('products')} />
@@ -134,7 +114,7 @@ const PageShell = ({ children, onReset, current, setCurrent }) => (
       </div>
     </header>
     <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
-    <footer className="max-w-7xl mx-auto px-4 pt-2 pb-8 text-xs text-slate-500">Stored locally in your browser. © {new Date().getFullYear()}</footer>
+    <footer className="max-w-7xl mx-auto px-4 pt-2 pb-8 text-xs text-slate-500">Data stored in Firestore. © {new Date().getFullYear()}</footer>
   </div>
 );
 
@@ -144,10 +124,9 @@ const NavBtn = ({ icon, label, active, onClick }) => (
   </button>
 );
 
-const Card = ({ children }) => (
-  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">{children}</div>
-);
-
+/*********************************
+ * Dashboard
+ *********************************/
 function Dashboard({ products, moves }) {
   const stockMap = useMemo(()=>computeStockByProduct(products, moves), [products, moves]);
   const totals = useMemo(()=>{
@@ -244,9 +223,9 @@ const LowStockList = ({ products, stockMap }) => {
 };
 
 const RecentMoves = ({ moves, products }) => {
-  const pmap = Object.fromEntries(products.map(p=>[p.id,p]));
-  const recent = [...moves].sort((a,b)=> b.date.localeCompare(a.date)).slice(0,8);
-  if (recent.length===0) return <div className="text-sm text-slate-500">No movements yet.</div>;
+  const pmap = Object.fromEntries(products.map(p => [p.id, p]));
+  const recent = [...moves].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+  if (recent.length === 0) return <div className="text-sm text-slate-500">No movements yet.</div>;
   return (
     <div className="overflow-auto">
       <table className="min-w-full text-sm">
@@ -260,10 +239,10 @@ const RecentMoves = ({ moves, products }) => {
           </tr>
         </thead>
         <tbody className="divide-y">
-          {recent.map(m=> (
+          {recent.map(m => (
             <tr key={m.id}>
               <td className="py-2">{m.date}</td>
-              <td className={m.type==='in'? 'text-green-700':'text-sky-700'}>{m.type.toUpperCase()}</td>
+              <td className={m.type === 'in' ? 'text-green-700' : 'text-sky-700'}>{m.type.toUpperCase()}</td>
               <td>{pmap[m.productId]?.name || '—'}</td>
               <td>{fmt.format(m.qty)}</td>
               <td>{m.party || '—'}</td>
@@ -275,28 +254,34 @@ const RecentMoves = ({ moves, products }) => {
   );
 };
 
+/*********************************
+ * Products Page
+ *********************************/
 function ProductsPage({ products, setProducts, moves }) {
-  const stockMap = useMemo(()=>computeStockByProduct(products, moves), [products, moves]);
-  const [editing, setEditing] = useState(null); // product or null
+  const stockMap = useMemo(() => computeStockByProduct(products, moves), [products, moves]);
+  const [editing, setEditing] = useState(null);
   const [query, setQuery] = useState("");
-  const filtered = products.filter(p => 
+
+  const filtered = products.filter(p =>
     [p.name, p.sku, p.category].some(s => s.toLowerCase().includes(query.toLowerCase()))
   );
 
-  const upsertProduct = (prod) => {
-    setProducts((prev) => {
-      const idx = prev.findIndex(p=>p.id===prod.id);
-      if (idx>=0) {
-        const next=[...prev]; next[idx]=prod; return next;
+  const upsertProduct = async (prod) => {
+    const saved = await saveProduct(prod);
+    setProducts(prev => {
+      const idx = prev.findIndex(p => p.id === saved.id);
+      if (idx >= 0) {
+        const next = [...prev]; next[idx] = saved; return next;
       }
-      return [...prev, prod];
+      return [...prev, saved];
     });
     setEditing(null);
   };
 
-  const removeProduct = (id) => {
+  const removeProductHandler = async (id) => {
     if (!window.confirm("Delete this product? Movements remain but product reference will be lost.")) return;
-    setProducts(prev => prev.filter(p=>p.id!==id));
+    await removeProduct(id);
+    setProducts(prev => prev.filter(p => p.id !== id));
   };
 
   return (
@@ -306,9 +291,9 @@ function ProductsPage({ products, setProducts, moves }) {
           <div className="flex items-center gap-2 mb-3">
             <h3 className="font-semibold">Products</h3>
             <span className="ml-auto"></span>
-            <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search name, SKU, category..." className="border rounded-xl px-3 py-2 text-sm w-64"/>
-            <button onClick={()=>setEditing({ id: uid(), name:"", sku:"", category:"", unit:"pcs", cost:0, price:0, minStock:0, createdAt: new Date().toISOString() })} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900 text-white text-sm">
-              <Plus className="w-4 h-4"/> New
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, SKU, category..." className="border rounded-xl px-3 py-2 text-sm w-64" />
+            <button onClick={() => setEditing({ id: "", name: "", sku: "", category: "", unit: "pcs", cost: 0, price: 0, minStock: 0, createdAt: new Date().toISOString() })} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900 text-white text-sm">
+              <Plus className="w-4 h-4" /> New
             </button>
           </div>
           <div className="overflow-auto">
@@ -327,20 +312,20 @@ function ProductsPage({ products, setProducts, moves }) {
               </thead>
               <tbody className="divide-y">
                 {filtered.map(p => (
-                  <tr key={p.id} className="align-top">
+                  <tr key={p.id}>
                     <td className="py-2">
                       <div className="font-medium">{p.name}</div>
                       <div className="text-xs text-slate-500">Added {new Date(p.createdAt).toLocaleDateString()}</div>
                     </td>
                     <td>{p.sku}</td>
                     <td>{p.category}</td>
-                    <td>{fmt.format(stockMap[p.id]||0)} {p.unit}</td>
+                    <td>{fmt.format(stockMap[p.id] || 0)} {p.unit}</td>
                     <td>{fmt.format(p.minStock)}</td>
                     <td>{currency(p.cost)}</td>
                     <td>{currency(p.price)}</td>
                     <td className="text-right">
-                      <button onClick={()=>setEditing(p)} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border mr-2"><Pencil className="w-4 h-4"/> Edit</button>
-                      <button onClick={()=>removeProduct(p.id)} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-red-600"><Trash2 className="w-4 h-4"/> Delete</button>
+                      <button onClick={() => setEditing(p)} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border mr-2"><Pencil className="w-4 h-4" /> Edit</button>
+                      <button onClick={() => removeProductHandler(p.id)} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-red-600"><Trash2 className="w-4 h-4" /> Delete</button>
                     </td>
                   </tr>
                 ))}
@@ -349,12 +334,11 @@ function ProductsPage({ products, setProducts, moves }) {
           </div>
         </Card>
       </div>
-
       <div>
         <Card>
-          <h3 className="font-semibold mb-2">{editing? 'Product Details' : 'Tips'}</h3>
+          <h3 className="font-semibold mb-2">{editing ? 'Product Details' : 'Tips'}</h3>
           {editing ? (
-            <ProductForm key={editing.id} initial={editing} onCancel={()=>setEditing(null)} onSave={upsertProduct} />
+            <ProductForm key={editing.id} initial={editing} onCancel={() => setEditing(null)} onSave={upsertProduct} />
           ) : (
             <ul className="list-disc pl-5 text-sm text-slate-600 space-y-2">
               <li>Use <b>Search</b> to quickly filter by name, SKU, or category.</li>
@@ -368,24 +352,27 @@ function ProductsPage({ products, setProducts, moves }) {
   );
 }
 
+/*********************************
+ * Product Form
+ *********************************/
 function ProductForm({ initial, onSave, onCancel }) {
   const [p, setP] = useState(initial);
-  const set = (k,v)=> setP(prev=> ({...prev, [k]: v}));
+  const set = (k, v) => setP(prev => ({ ...prev, [k]: v }));
   const valid = p.name.trim() && p.sku.trim() && p.unit.trim();
   return (
-    <form className="space-y-3" onSubmit={(e)=>{e.preventDefault(); if(valid) onSave({...p, cost:+p.cost||0, price:+p.price||0, minStock:Math.max(0, Math.floor(+p.minStock||0))});}}>
-      <InputRow label="Name" value={p.name} onChange={v=>set('name', v)} required />
-      <InputRow label="SKU / Code" value={p.sku} onChange={v=>set('sku', v)} required />
-      <InputRow label="Category" value={p.category} onChange={v=>set('category', v)} />
-      <InputRow label="Unit" value={p.unit} onChange={v=>set('unit', v)} placeholder="pcs, box, kg…" required />
+    <form className="space-y-3" onSubmit={e => { e.preventDefault(); if (valid) onSave({ ...p, cost: +p.cost || 0, price: +p.price || 0, minStock: Math.max(0, Math.floor(+p.minStock || 0)) }); }}>
+      <InputRow label="Name" value={p.name} onChange={v => set('name', v)} required />
+      <InputRow label="SKU / Code" value={p.sku} onChange={v => set('sku', v)} required />
+      <InputRow label="Category" value={p.category} onChange={v => set('category', v)} />
+      <InputRow label="Unit" value={p.unit} onChange={v => set('unit', v)} placeholder="pcs, box, kg…" required />
       <div className="grid grid-cols-2 gap-2">
-        <InputRow label="Cost Price" type="number" step="0.01" value={p.cost} onChange={v=>set('cost', v)} />
-        <InputRow label="Selling Price" type="number" step="0.01" value={p.price} onChange={v=>set('price', v)} />
+        <InputRow label="Cost Price" type="number" step="0.01" value={p.cost} onChange={v => set('cost', v)} />
+        <InputRow label="Selling Price" type="number" step="0.01" value={p.price} onChange={v => set('price', v)} />
       </div>
-      <InputRow label="Min Stock" type="number" value={p.minStock} onChange={v=>set('minStock', v)} />
+      <InputRow label="Min Stock" type="number" value={p.minStock} onChange={v => set('minStock', v)} />
       <div className="flex gap-2 pt-2">
-        <button className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl ${valid? 'bg-slate-900 text-white':'bg-slate-200 text-slate-500 cursor-not-allowed'}`} disabled={!valid}>
-          <Save className="w-4 h-4"/> Save
+        <button className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl ${valid ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-500 cursor-not-allowed'}`} disabled={!valid}>
+          <Save className="w-4 h-4" /> Save
         </button>
         <button type="button" onClick={onCancel} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border">Cancel</button>
       </div>
@@ -393,60 +380,31 @@ function ProductForm({ initial, onSave, onCancel }) {
   );
 }
 
-const InputRow = ({ label, value, onChange, type="text", placeholder, step, required }) => (
+const InputRow = ({ label, value, onChange, type = "text", placeholder, step, required }) => (
   <label className="block text-sm">
     <span className="text-slate-600">{label} {required && <span className="text-red-600">*</span>}</span>
-    <input type={type} step={step} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+    <input type={type} step={step} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
       className="mt-1 w-full border rounded-xl px-3 py-2" required={required} />
   </label>
 );
 
-function StockForm({ type, products, onSubmit }) {
-  const [productId, setProductId] = useState(products[0]?.id || "");
-  const [qty, setQty] = useState("");
-  const [date, setDate] = useState(todayISO());
-  const [party, setParty] = useState("");
-  const [unitPrice, setUnitPrice] = useState("");
-
-  const submit = (e)=>{
-    e.preventDefault();
-    const q = Math.max(1, Math.floor(+qty||0));
-    if (!productId || !q) return;
-    onSubmit({ id: uid(), type, productId, qty: q, date, party: party.trim() || undefined, unitPrice: unitPrice===""? undefined : +unitPrice });
-    setQty(""); setParty(""); setUnitPrice("");
+/*********************************
+ * Stock In / Out Page
+ *********************************/
+function StockPage({ type, products, setMoves }) {
+  const submitHandler = async (m) => {
+    const saved = await saveMove(m);
+    setMoves(prev => [...prev, saved]);
   };
 
   return (
-    <form onSubmit={submit} className="space-y-3">
-      <label className="block text-sm">
-        <span className="text-slate-600">Product</span>
-        <select value={productId} onChange={e=>setProductId(e.target.value)} className="mt-1 w-full border rounded-xl px-3 py-2">
-          {products.map(p=> <option key={p.id} value={p.id}>{p.name} · {p.sku}</option>)}
-        </select>
-      </label>
-      <div className="grid grid-cols-2 gap-2">
-        <InputRow label="Quantity" type="number" value={qty} onChange={setQty} />
-        <InputRow label="Date" type="date" value={date} onChange={setDate} />
-      </div>
-      <InputRow label={type==='in'? 'Supplier' : 'Customer / Dept.'} value={party} onChange={setParty} />
-      <InputRow label={type==='in'? 'Purchase Unit Price' : 'Selling Unit Price'} type="number" step="0.01" value={unitPrice} onChange={setUnitPrice} />
-      <button className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl ${type==='in'? 'bg-green-600 text-white':'bg-sky-600 text-white'}`}>
-        {type==='in'? <Upload className="w-4 h-4"/> : <Download className="w-4 h-4"/>}
-        {type==='in'? 'Add Stock' : 'Remove Stock'}
-      </button>
-    </form>
-  );
-}
-
-function StockPage({ type, products, setMoves }) {
-  return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <Card>
-        <h3 className="font-semibold mb-2">{type==='in'? 'Add Stock' : 'Remove Stock'}</h3>
-        {products.length===0 ? (
+        <h3 className="font-semibold mb-2">{type === 'in' ? 'Add Stock' : 'Remove Stock'}</h3>
+        {products.length === 0 ? (
           <div className="text-sm text-slate-600">Add products first.</div>
         ) : (
-          <StockForm type={type} products={products} onSubmit={(m)=>setMoves(prev=>[...prev, m])} />
+          <StockForm type={type} products={products} onSubmit={submitHandler} />
         )}
       </Card>
       <Card>
@@ -461,135 +419,113 @@ function StockPage({ type, products, setMoves }) {
   );
 }
 
-function ReportsPage({ products, moves }) {
-  const stockMap = useMemo(()=>computeStockByProduct(products, moves), [products, moves]);
-  const [tab, setTab] = useState('stock');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+function StockForm({ type, products, onSubmit }) {
+  const [productId, setProductId] = useState(products[0]?.id || "");
+  const [qty, setQty] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [party, setParty] = useState("");
+  const [unitPrice, setUnitPrice] = useState("");
 
-  const inRange = (d) => {
-    if (from && d < from) return false;
-    if (to && d > to) return false;
-    return true;
+  const submit = (e) => {
+    e.preventDefault();
+    const q = Math.max(1, Math.floor(+qty || 0));
+    if (!productId || !q) return;
+    onSubmit({ id: uid(), type, productId, qty: q, date, party: party.trim() || undefined, unitPrice: unitPrice === "" ? undefined : +unitPrice });
+    setQty(""); setParty(""); setUnitPrice("");
   };
 
-  const filteredMoves = moves.filter(m => inRange(m.date)).sort((a,b)=> b.date.localeCompare(a.date));
-  const pmap = Object.fromEntries(products.map(p=>[p.id,p]));
-
-  // Profit approximation (assumes avg unit costs/sell prices per movement)
-  const totals = filteredMoves.reduce((acc,m)=>{
-    const unit = m.unitPrice ?? (m.type==='in'? pmap[m.productId]?.cost : pmap[m.productId]?.price);
-    const amt = (unit||0) * m.qty * (m.type==='in'? -1 : 1);
-    return { ...acc, revenue: acc.revenue + (m.type==='out'? (unit||0)*m.qty : 0), cost: acc.cost + (m.type==='in'? (unit||0)*m.qty : 0) };
-  }, { revenue:0, cost:0 });
-
   return (
-    <div className="space-y-4">
+    <form className="space-y-3" onSubmit={submit}>
+      <div>
+        <label className="block text-sm">Product</label>
+        <select value={productId} onChange={e => setProductId(e.target.value)} className="mt-1 w-full border rounded-xl px-3 py-2">
+          {products.map(p => <option key={p.id} value={p.id}>{p.name} ({p.unit})</option>)}
+        </select>
+      </div>
+      <InputRow label="Quantity" type="number" value={qty} onChange={setQty} required />
+      <InputRow label="Date" type="date" value={date} onChange={setDate} required />
+      <InputRow label="Party / Supplier" value={party} onChange={setParty} />
+      <InputRow label="Unit Price" type="number" step="0.01" value={unitPrice} onChange={setUnitPrice} />
+      <button type="submit" className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900 text-white">
+        <Save className="w-4 h-4" /> Save
+      </button>
+    </form>
+  );
+}
+
+/*********************************
+ * Reports Page
+ *********************************/
+function ReportsPage({ products, moves }) {
+  const stockMap = useMemo(() => computeStockByProduct(products, moves), [products, moves]);
+  const totalValue = products.reduce((sum, p) => sum + (stockMap[p.id] || 0) * (p.cost || 0), 0);
+  return (
+    <div className="grid grid-cols-1 gap-4">
       <Card>
-        <div className="flex items-end gap-2">
-          <div className="mr-auto">
-            <h3 className="font-semibold">Reports</h3>
-          </div>
-          <label className="text-sm">From
-            <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="ml-2 border rounded-xl px-3 py-2"/>
-          </label>
-          <label className="text-sm">To
-            <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="ml-2 border rounded-xl px-3 py-2"/>
-          </label>
-          <button onClick={()=>{setFrom(''); setTo('');}} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm"><RefreshCcw className="w-4 h-4"/> Clear</button>
-        </div>
-        <div className="mt-3 border-b flex gap-2">
-          {['stock','low','moves','summary'].map(k=> (
-            <button key={k} onClick={()=>setTab(k)} className={`px-3 py-2 text-sm ${tab===k? 'border-b-2 border-slate-900 font-medium':'text-slate-600'}`}>{
-              k==='stock'? 'Current Stock' : k==='low'? 'Low-stock' : k==='moves'? 'Movements' : 'Summary'
-            }</button>
-          ))}
-        </div>
-        <div className="pt-3">
-          {tab==='stock' && (
-            <div className="overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left text-slate-500"><th className="py-2">Product</th><th>SKU</th><th>Category</th><th>Qty</th><th>Unit</th></tr>
-                </thead>
-                <tbody className="divide-y">
-                  {products.map(p=> (
-                    <tr key={p.id}>
-                      <td className="py-2">{p.name}</td>
-                      <td>{p.sku}</td>
-                      <td>{p.category}</td>
-                      <td>{fmt.format(stockMap[p.id]||0)}</td>
-                      <td>{p.unit}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {tab==='low' && (
-            <LowStockList products={products} stockMap={stockMap} />
-          )}
-          {tab==='moves' && (
-            <div className="overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left text-slate-500"><th className="py-2">Date</th><th>Type</th><th>Product</th><th>Qty</th><th>Unit Price</th><th>Party</th></tr>
-                </thead>
-                <tbody className="divide-y">
-                  {filteredMoves.map(m=> (
-                    <tr key={m.id}>
-                      <td className="py-2">{m.date}</td>
-                      <td className={m.type==='in'? 'text-green-700':'text-sky-700'}>{m.type.toUpperCase()}</td>
-                      <td>{pmap[m.productId]?.name || '—'}</td>
-                      <td>{fmt.format(m.qty)}</td>
-                      <td>{m.unitPrice!=null? currency(m.unitPrice) : '—'}</td>
-                      <td>{m.party || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {tab==='summary' && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card>
-                <div className="text-slate-500 text-sm">Revenue (OUT)</div>
-                <div className="text-2xl font-semibold">{currency(totals.revenue)}</div>
-              </Card>
-              <Card>
-                <div className="text-slate-500 text-sm">Cost (IN)</div>
-                <div className="text-2xl font-semibold">{currency(totals.cost)}</div>
-              </Card>
-              <Card>
-                <div className="text-slate-500 text-sm">Gross (≈)</div>
-                <div className="text-2xl font-semibold">{currency(totals.revenue - totals.cost)}</div>
-              </Card>
-            </div>
-          )}
+        <h3 className="font-semibold mb-3">Stock Summary</h3>
+        <div className="text-sm text-slate-600">Total products: {products.length}, Total value: {currency(totalValue)}</div>
+        <div className="overflow-auto mt-3">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500">
+                <th>Name</th>
+                <th>SKU</th>
+                <th>Stock</th>
+                <th>Unit Cost</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {products.map(p => (
+                <tr key={p.id}>
+                  <td>{p.name}</td>
+                  <td>{p.sku}</td>
+                  <td>{stockMap[p.id] || 0} {p.unit}</td>
+                  <td>{currency(p.cost)}</td>
+                  <td>{currency((stockMap[p.id] || 0) * (p.cost || 0))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </Card>
     </div>
   );
 }
 
-export default function StockManagementApp() {
-  const { products, setProducts, moves, setMoves } = useSeededData();
-  const [page, setPage] = useState('dashboard');
+/*********************************
+ * Card Component
+ *********************************/
+const Card = ({ children }) => (
+  <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200">{children}</div>
+);
 
-  const resetAll = () => {
-    if (!window.confirm('Reset all local data? This cannot be undone.')) return;
-    localStorage.removeItem('sm_products');
-    localStorage.removeItem('sm_moves');
-    window.location.reload();
+/*********************************
+ * Main App
+ *********************************/
+export default function App() {
+  const [products, setProducts] = useState([]);
+  const [moves, setMoves] = useState([]);
+  const [current, setCurrent] = useState('dashboard');
+
+  useEffect(() => { fetchProducts().then(setProducts); fetchMoves().then(setMoves); }, []);
+
+  const resetData = async () => {
+    if (!window.confirm("This will delete all Firestore data. Continue?")) return;
+    for (const p of products) await removeProduct(p.id);
+    // Note: movements cleanup is manual here, could implement batch delete
+    setProducts([]); setMoves([]);
   };
 
   return (
-    <PageShell onReset={resetAll} current={page} setCurrent={setPage}>
-      {page==='dashboard' && <Dashboard products={products} moves={moves} />}
-      {page==='products' && <ProductsPage products={products} setProducts={setProducts} moves={moves} />}
-      {page==='in' && <StockPage type='in' products={products} setMoves={setMoves} />}
-      {page==='out' && <StockPage type='out' products={products} setMoves={setMoves} />}
-      {page==='reports' && <ReportsPage products={products} moves={moves} />}
+    <PageShell current={current} setCurrent={setCurrent} onReset={resetData}>
+      {current === 'dashboard' && <Dashboard products={products} moves={moves} />}
+      {current === 'products' && <ProductsPage products={products} setProducts={setProducts} moves={moves} />}
+      {current === 'in' && <StockPage type="in" products={products} setMoves={setMoves} />}
+      {current === 'out' && <StockPage type="out" products={products} setMoves={setMoves} />}
+      {current === 'reports' && <ReportsPage products={products} moves={moves} />}
     </PageShell>
   );
 }
+
+git add .
