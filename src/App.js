@@ -9,12 +9,13 @@ import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } f
  * Firebase Initialization
  *********************************/
 const firebaseConfig = {
-  apiKey: "xxxxxx",
-  authDomain: "yourapp.firebaseapp.com",
-  projectId: "yourapp",
-  storageBucket: "yourapp.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:123456789:web:abcdef"
+  apiKey: "AIzaSyDGVeI8p4D3YF5UsJBPsSkmTSlt25KOMgs",
+  authDomain: "stock-management-eae2b.firebaseapp.com",
+  projectId: "stock-management-eae2b",
+  storageBucket: "stock-management-eae2b.firebasestorage.app",
+  messagingSenderId: "155573704727",
+  appId: "1:155573704727:web:88842103e4f594e995a452",
+  measurementId: "G-4KNYLFZ1Y5"
 };
 
 const app = initializeApp(firebaseConfig);
