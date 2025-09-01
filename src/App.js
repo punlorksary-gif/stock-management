@@ -527,4 +527,3 @@ export default function App() {
     </PageShell>
   );
 }
-
